@@ -1,0 +1,329 @@
+{
+  "name": "Lead Qualification Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "webhook/lead",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Lead Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "lead-qualification"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://person.clearbit.com/v2/companies/{% set domain = $json.email.split('@')[1] %}{{domain}}",
+        "authentication": "genericCredentialType",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": []
+        },
+        "options": {}
+      },
+      "id": "enrich-company",
+      "name": "Enrich Company Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [450, 300],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "clearbit-cred",
+          "name": "Clearbit API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lead scoring algorithm\nconst lead = $input.all()[0].json;\nconst company = $json;\n\nlet score = 0;\nlet reasons = [];\n\n// Company size scoring (1-10 points)\nconst employeeCount = company.metrics?.employees || 0;\nif (employeeCount >= 50 && employeeCount <= 200) {\n  score += 10;\n  reasons.push('Ideal company size (50-200 employees)');\n} else if (employeeCount >= 20 && employeeCount <= 500) {\n  score += 7;\n  reasons.push('Good company size');\n} else if (employeeCount > 0) {\n  score += 3;\n  reasons.push('Small company');\n}\n\n// Industry match (1-5 points)\nconst targetIndustries = ['Technology', 'Software', 'SaaS', 'Marketing', 'Finance', 'Healthcare'];\nif (targetIndustries.some(i => company.category?.industry?.includes(i))) {\n  score += 5;\n  reasons.push('Target industry match');\n}\n\n// Email domain quality (0-2 points)\nconst emailDomain = lead.email.split('@')[1];\nconst personalDomains = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com'];\nif (!personalDomains.includes(emailDomain)) {\n  score += 2;\n  reasons.push('Business email domain');\n}\n\n// Job title seniority (1-5 points)\nconst seniority = lead.job_title?.toLowerCase() || '';\nif (seniority.includes('ceo') || seniority.includes('cto') || seniority.includes('founder')) {\n  score += 5;\n  reasons.push('C-level executive');\n} else if (seniority.includes('director') || seniority.includes('vp') || seniority.includes('head')) {\n  score += 4;\n  reasons.push('Director level');\n} else if (seniority.includes('manager') || seniority.includes('lead')) {\n  score += 3;\n  reasons.push('Manager level');\n}\n\n// Funding stage (1-5 points)\nconst fundingRound = company.funding?.round;\nif (['Series A', 'Series B', 'Series C'].includes(fundingRound)) {\n  score += 4;\n  reasons.push('Funded company');\n}\n\n// Determine lead tier\nlet tier = 'cold';\nlet priority = 'low';\nif (score >= 15) {\n  tier = 'hot';\n  priority = 'high';\n} else if (score >= 10) {\n  tier = 'warm';\n  priority = 'medium';\n}\n\nreturn {\n  json: {\n    ...lead,\n    company: {\n      name: company.name,\n      domain: company.domain,\n      industry: company.category?.industry,\n      employees: employeeCount,\n      funding: fundingRound\n    },\n    lead_score: score,\n    tier,\n    priority,\n    scoring_reasons: reasons,\n    qualified_at: new Date().toISOString()\n  }\n};"
+      },
+      "id": "score-lead",
+      "name": "Calculate Lead Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.tier}}",
+                    "rightValue": "hot",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "hot"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.tier}}",
+                    "rightValue": "warm",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "warm"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.tier}}",
+                    "rightValue": "cold",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "cold"
+            }
+          ]
+        }
+      },
+      "id": "route-lead",
+      "name": "Route by Tier",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotDeveloperApi",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "properties",
+              "value": "={{{'email': $json.email, 'firstname': $json.first_name, 'lastname': $json.last_name, 'company': $json.company.name, 'lead_score': $json.lead_score, 'lifecycle_stage': 'sales-qualified-lead'}}}}'"
+            }
+          ]
+        }
+      },
+      "id": "add-to-hubspot-hot",
+      "name": "Add to HubSpot (Hot)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1050, 200],
+      "credentials": {
+        "hubspotDeveloperApi": {
+          "id": "hubspot-cred",
+          "name": "HubSpot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "={{$env.SLACK_SALES_CHANNEL}}"
+            },
+            {
+              "name": "text",
+              "value": "🔥 HOT LEAD: {{$json.first_name}} {{$json.last_name}} from {{$json.company.name}} (Score: {{$json.lead_score}})"
+            }
+          ]
+        }
+      },
+      "id": "alert-slack-hot",
+      "name": "Alert Sales (Hot)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1250, 200],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-cred",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotDeveloperApi",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "properties",
+              "value": "={{{'email': $json.email, 'firstname': $json.first_name, 'lastname': $json.last_name, 'company': $json.company.name, 'lead_score': $json.lead_score, 'lifecycle_stage': 'lead'}}}}'"
+            }
+          ]
+        }
+      },
+      "id": "add-to-hubspot-warm",
+      "name": "Add to HubSpot (Warm)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1050, 300],
+      "credentials": {
+        "hubspotDeveloperApi": {
+          "id": "hubspot-cred",
+          "name": "HubSpot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/communication/v3/email",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotDeveloperApi",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "to",
+              "value": "={{[$json.email]}}"
+            },
+            {
+              "name": "subject",
+              "value": "Thanks for your interest!"
+            },
+            {
+              "name": "html",
+              "value": "<p>Hi {{$json.first_name}},</p><p>Thanks for reaching out! We'll be in touch soon.</p>"
+            }
+          ]
+        }
+      },
+      "id": "send-nurture-email",
+      "name": "Send Nurture Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1050, 400],
+      "credentials": {
+        "hubspotDeveloperApi": {
+          "id": "hubspot-cred",
+          "name": "HubSpot API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Lead Webhook": {
+      "main": [
+        [
+          {
+            "node": "Enrich Company Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich Company Data": {
+      "main": [
+        [
+          {
+            "node": "Calculate Lead Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Lead Score": {
+      "main": [
+        [
+          {
+            "node": "Route by Tier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Tier": {
+      "main": [
+        [
+          {
+            "node": "Add to HubSpot (Hot)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Alert Sales (Hot)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Add to HubSpot (Warm)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Nurture Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "automation",
+      "createdAt": "2024-01-01T00:00:00.000Z"
+    },
+    {
+      "name": "sales",
+      "createdAt": "2024-01-01T00:00:00.000Z"
+    }
+  ]
+}
