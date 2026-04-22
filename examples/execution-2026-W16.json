@@ -1,0 +1,11 @@
+{
+  "workflow": "lead-qualification",
+  "executed_at": "2026-04-22T16:13:00.610583",
+  "stats": {
+    "leads_processed": 47,
+    "hot_leads": 12,
+    "warm_leads": 23,
+    "cold_leads": 12,
+    "avg_score": 8.7
+  }
+}

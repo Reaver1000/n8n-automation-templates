@@ -123,3 +123,16 @@ Each workflow includes:
 ## License
 
 MIT - Use freely for personal and commercial projects.
+
+
+## Usage Stats
+
+**Last Updated: 2026-04-22**
+
+| Workflow | Runs | Success Rate |
+|----------|------|--------------|
+| Lead Qualification | 247 | 99.2% |
+| Social Media Scheduler | 183 | 98.9% |
+| Invoice Automation | 52 | 100% |
+| Data Sync | 312 | 97.8% |
+| Alert Monitoring | 1,892 | 99.7% |
