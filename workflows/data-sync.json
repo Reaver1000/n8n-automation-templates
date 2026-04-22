@@ -1,0 +1,285 @@
+{
+  "name": "Data Sync Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "schedule-hourly",
+      "name": "Hourly Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.SOURCE_API_URL}}/users",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "updated_since",
+              "value": "={{$env.LAST_SYNC_TIMESTAMP || '2024-01-01'}}"
+            }
+          ]
+        }
+      },
+      "id": "fetch-source-a",
+      "name": "Fetch Source A",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [450, 250],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "source-a-cred",
+          "name": "Source A API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.SOURCE_B_API_URL}}/customers",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth"
+      },
+      "id": "fetch-source-b",
+      "name": "Fetch Source B",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [450, 350],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "source-b-cred",
+          "name": "Source B API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge and deduplicate records from multiple sources\nconst sourceA = $input.all().filter(item => item.json.id?.startsWith('A-'));\nconst sourceB = $input.all().filter(item => item.json.customer_id);\n\n// Normalize Source A records\nconst normalizedA = sourceA.map(item => {\n  const record = item.json;\n  return {\n    source: 'A',\n    sourceId: record.id,\n    email: record.email?.toLowerCase(),\n    name: record.full_name,\n    company: record.company_name,\n    createdAt: record.created_at,\n    updatedAt: record.updated_at,\n    raw: record\n  };\n});\n\n// Normalize Source B records\nconst normalizedB = sourceB.map(item => {\n  const record = item.json;\n  return {\n    source: 'B',\n    sourceId: record.customer_id,\n    email: record.email_address?.toLowerCase(),\n    name: `${record.first_name} ${record.last_name}`,\n    company: record.organization,\n    createdAt: record.created_date,\n    updatedAt: record.last_modified,\n    raw: record\n  };\n});\n\n// Combine all records\nconst allRecords = [...normalizedA, ...normalizedB];\n\n// Deduplicate by email (keep most recent)\nconst dedupMap = new Map();\nfor (const record of allRecords) {\n  const email = record.email;\n  if (!email) continue;\n  \n  const existing = dedupMap.get(email);\n  if (!existing || new Date(record.updatedAt) > new Date(existing.updatedAt)) {\n    dedupMap.set(email, record);\n  }\n}\n\nconst dedupedRecords = Array.from(dedupMap.values());\n\n// Categorize for processing\nconst now = new Date();\nconst lastSync = new Date($env.LAST_SYNC_TIMESTAMP || '2024-01-01');\n\nconst categorized = dedupedRecords.map(record => {\n  const updatedDate = new Date(record.updatedAt);\n  return {\n    ...record,\n    isNew: updatedDate > lastSync && updatedDate <= now,\n    isUpdate: updatedDate > lastSync,\n    status: updatedDate > lastSync ? 'needs_sync' : 'synced'\n  };\n});\n\nreturn categorized.map(r => ({ json: r }));"
+      },
+      "id": "merge-dedupe",
+      "name": "Merge & Dedupe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.status}}",
+              "rightValue": "needs_sync",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "filter-needs-sync",
+      "name": "Filter Needs Sync",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "table": "={{$env.DATABASE_TABLE}}",
+        "columns": {
+          "mappingMode": "defineMapping",
+          "value": {
+            "email": "={{$json.email}}",
+            "name": "={{$json.name}}",
+            "company": "={{$json.company}}",
+            "source": "={{$json.source}}",
+            "source_id": "={{$json.sourceId}}",
+            "last_updated": "={{$json.updatedAt}}",
+            "synced_at": "={{new Date().toISOString()}}"
+          }
+        },
+        "conflictColumns": ["email"]
+      },
+      "id": "upsert-db",
+      "name": "Upsert to Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1050, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-cred",
+          "name": "PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log sync statistics\nconst records = $input.all();\nconst stats = {\n  totalProcessed: records.length,\n  sourceA: records.filter(r => r.json.source === 'A').length,\n  sourceB: records.filter(r => r.json.source === 'B').length,\n  timestamp: new Date().toISOString(),\n  status: 'success'\n};\n\nconsole.log('Sync completed:', JSON.stringify(stats, null, 2));\nreturn [{ json: stats }];"
+      },
+      "id": "log-stats",
+      "name": "Log Sync Stats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SLACK_WEBHOOK_URL}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "🔄 Data Sync Complete: {{$json.totalProcessed}} records synced"
+            },
+            {
+              "name": "channel",
+              "value": "={{$env.SLACK_CHANNEL}}"
+            }
+          ]
+        }
+      },
+      "id": "notify-slack",
+      "name": "Notify Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Update last sync timestamp for next run\nconst now = new Date().toISOString();\n\n// This would typically update an environment variable or database\n// For n8n, we store in workflow static data\nreturn [{ json: { lastSyncTimestamp: now } }];"
+      },
+      "id": "update-timestamp",
+      "name": "Update Sync Timestamp",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 300]
+    }
+  ],
+  "connections": {
+    "Hourly Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Source A",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Source B",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Source A": {
+      "main": [
+        [
+          {
+            "node": "Merge & Dedupe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Source B": {
+      "main": [
+        [
+          {
+            "node": "Merge & Dedupe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge & Dedupe": {
+      "main": [
+        [
+          {
+            "node": "Filter Needs Sync",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Needs Sync": {
+      "main": [
+        [
+          {
+            "node": "Upsert to Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert to Database": {
+      "main": [
+        [
+          {
+            "node": "Log Sync Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Sync Stats": {
+      "main": [
+        [
+          {
+            "node": "Notify Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Slack": {
+      "main": [
+        [
+          {
+            "node": "Update Sync Timestamp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "automation"
+    },
+    {
+      "name": "data-engineering"
+    }
+  ]
+}

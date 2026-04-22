@@ -1,0 +1,222 @@
+{
+  "name": "Invoice Automation Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 1 * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-monthly",
+      "name": "Monthly Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.toggl.com/reports/api/v2/details",
+        "authentication": "genericCredentialType",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "workspace_id",
+              "value": "={{$env.TOGGL_WORKSPACE_ID}}"
+            },
+            {
+              "name": "since",
+              "value": "={{$now.minus({months: 1}).startOf('month').format('yyyy-MM-dd')}}"
+            },
+            {
+              "name": "until",
+              "value": "={{$now.minus({months: 1}).endOf('month').format('yyyy-MM-dd')}}"
+            },
+            {
+              "name": "user_agent",
+              "value": "invoice-automation"
+            }
+          ]
+        }
+      },
+      "id": "fetch-time-entries",
+      "name": "Fetch Time Entries",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [450, 300],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "toggl-cred",
+          "name": "Toggl API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate time entries by project/client\nconst entries = $input.all();\nconst aggregated = {};\n\nfor (const item of entries) {\n  const entry = item.json;\n  const projectId = entry.project_id || 'default';\n  const clientName = entry.client || 'Unknown Client';\n  \n  if (!aggregated[clientName]) {\n    aggregated[clientName] = {\n      client: clientName,\n      projects: {},\n      totalHours: 0,\n      entries: []\n    };\n  }\n  \n  if (!aggregated[clientName].projects[projectId]) {\n    aggregated[clientName].projects[projectId] = {\n      name: entry.project || 'General',\n      hours: 0,\n      rate: entry.rate || parseFloat($env.DEFAULT_HOURLY_RATE || '100')\n    };\n  }\n  \n  const hours = entry.dur / 3600000; // Convert ms to hours\n  aggregated[clientName].projects[projectId].hours += hours;\n  aggregated[clientName].totalHours += hours;\n  aggregated[clientName].entries.push({\n    description: entry.description,\n    date: entry.start,\n    hours: hours\n  });\n}\n\n// Convert to array and calculate totals\nconst invoices = Object.values(aggregated).map(client => {\n  let subtotal = 0;\n  const lineItems = Object.values(client.projects).map(proj => {\n    const amount = proj.hours * proj.rate;\n    subtotal += amount;\n    return {\n      description: proj.name,\n      hours: Math.round(proj.hours * 100) / 100,\n      rate: proj.rate,\n      amount: Math.round(amount * 100) / 100\n    };\n  });\n  \n  const taxRate = parseFloat($env.TAX_RATE || '0');\n  const tax = Math.round(subtotal * taxRate * 100) / 100;\n  \n  return {\n    client: client.client,\n    invoiceNumber: `INV-${Date.now()}`,\n    invoiceDate: new Date().toISOString().split('T')[0],\n    dueDate: new Date(Date.now() + 30*24*60*60*1000).toISOString().split('T')[0],\n    lineItems,\n    subtotal: Math.round(subtotal * 100) / 100,\n    tax,\n    total: Math.round((subtotal + tax) * 100) / 100,\n    entries: client.entries\n  };\n});\n\nreturn invoices.map(i => ({ json: i }));"
+      },
+      "id": "aggregate-time",
+      "name": "Aggregate & Calculate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate HTML invoice\nconst invoice = $input.all()[0].json;\n\nconst lineItemsHtml = invoice.lineItems.map(item => `\n  <tr>\n    <td style=\"padding: 8px; border-bottom: 1px solid #eee;\">${item.description}</td>\n    <td style=\"padding: 8px; border-bottom: 1px solid #eee; text-align: right;\">${item.hours}</td>\n    <td style=\"padding: 8px; border-bottom: 1px solid #eee; text-align: right;\">$${item.rate.toFixed(2)}</td>\n    <td style=\"padding: 8px; border-bottom: 1px solid #eee; text-align: right;\">$${item.amount.toFixed(2)}</td>\n  </tr>\n`).join('');\n\nconst html = `\n<!DOCTYPE html>\n<html>\n<head>\n  <style>\n    body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 40px; }\n    .header { display: flex; justify-content: space-between; margin-bottom: 40px; }\n    .invoice-title { font-size: 28px; color: #333; }\n    .details { margin-bottom: 30px; }\n    .details p { margin: 5px 0; color: #666; }\n    table { width: 100%; border-collapse: collapse; margin: 20px 0; }\n    th { background: #f5f5f5; padding: 12px 8px; text-align: left; }\n    .totals { margin-top: 20px; text-align: right; }\n    .totals p { margin: 5px 0; }\n    .total-final { font-size: 20px; font-weight: bold; }\n    .footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #eee; color: #999; font-size: 12px; }\n  </style>\n</head>\n<body>\n  <div class=\"header\">\n    <div class=\"invoice-title\">INVOICE</div>\n    <div>\n      <strong>Invoice #:</strong> ${invoice.invoiceNumber}<br>\n      <strong>Date:</strong> ${invoice.invoiceDate}<br>\n      <strong>Due:</strong> ${invoice.dueDate}\n    </div>\n  </div>\n  \n  <div class=\"details\">\n    <p><strong>Bill To:</strong></p>\n    <p>${invoice.client}</p>\n  </div>\n  \n  <table>\n    <thead>\n      <tr>\n        <th>Description</th>\n        <th style=\"text-align: right;\">Hours</th>\n        <th style=\"text-align: right;\">Rate</th>\n        <th style=\"text-align: right;\">Amount</th>\n      </tr>\n    </thead>\n    <tbody>\n      ${lineItemsHtml}\n    </tbody>\n  </table>\n  \n  <div class=\"totals\">\n    <p><strong>Subtotal:</strong> $${invoice.subtotal.toFixed(2)}</p>\n    ${invoice.tax > 0 ? `<p><strong>Tax:</strong> $${invoice.tax.toFixed(2)}</p>` : ''}\n    <p class=\"total-final\"><strong>Total Due:</strong> $${invoice.total.toFixed(2)}</p>\n  </div>\n  \n  <div class=\"footer\">\n    <p>Payment Terms: Net 30</p>\n    <p>Thank you for your business!</p>\n  </div>\n</body>\n</html>\n`;\n\nreturn [{ json: { html, invoice } }];"
+      },
+      "id": "generate-html",
+      "name": "Generate Invoice HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "mode": "html",
+        "html": "={{$json.html}}",
+        "options": {
+          "width": 800,
+          "height": 1100
+        }
+      },
+      "id": "convert-pdf",
+      "name": "Convert to PDF",
+      "type": "n8n-nodes-base.htmlToPdf",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "from": "={{$env.SENDER_EMAIL}}",
+        "to": "={{$json.invoice.client}}",
+        "subject": "Invoice #{{$json.invoice.invoiceNumber}} - Payment Due",
+        "text": "Please find attached your invoice for this month.",
+        "attachments": {
+          "attachments": [
+            {
+              "binaryPropertyName": "data"
+            }
+          ]
+        }
+      },
+      "id": "send-email",
+      "name": "Email Invoice",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1250, 300],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-cred",
+          "name": "SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "={{$env.TRACKING_SHEET_ID}}",
+        "sheetName": "Invoices",
+        "columns": {
+          "mappingMode": "autoMapInputData"
+        }
+      },
+      "id": "log-invoice",
+      "name": "Log to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1450, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "sheets-cred",
+          "name": "Google Sheets"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Monthly Trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch Time Entries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Time Entries": {
+      "main": [
+        [
+          {
+            "node": "Aggregate & Calculate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate & Calculate": {
+      "main": [
+        [
+          {
+            "node": "Generate Invoice HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Invoice HTML": {
+      "main": [
+        [
+          {
+            "node": "Convert to PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to PDF": {
+      "main": [
+        [
+          {
+            "node": "Email Invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Invoice": {
+      "main": [
+        [
+          {
+            "node": "Log to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "automation"
+    },
+    {
+      "name": "finance"
+    }
+  ]
+}

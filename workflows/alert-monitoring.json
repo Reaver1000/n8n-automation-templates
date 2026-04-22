@@ -1,0 +1,397 @@
+{
+  "name": "Alert Monitoring Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "schedule-5min",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.example.com/health",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "check-api-1",
+      "name": "Check API 1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [450, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.example2.com/status",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "check-api-2",
+      "name": "Check API 2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://database.example.com/ping",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "check-db",
+      "name": "Check Database",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [450, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate health check results\nconst results = $input.all();\nconst checks = [];\n\nfor (const item of results) {\n  const response = item.json;\n  const startTime = item.json.$metadata?.startTime || Date.now();\n  const responseTime = Date.now() - startTime;\n  \n  const check = {\n    endpoint: response.config?.url || 'unknown',\n    status: response.status || (response.error ? 'error' : 'unknown'),\n    statusCode: response.statusCode || response.status || null,\n    responseTime: responseTime,\n    isHealthy: response.statusCode >= 200 && response.statusCode < 300,\n    errorMessage: response.error?.message || response.message || null,\n    timestamp: new Date().toISOString()\n  };\n  \n  checks.push(check);\n}\n\n// Calculate overall health\nconst healthyCount = checks.filter(c => c.isHealthy).length;\nconst overallHealth = {\n  total: checks.length,\n  healthy: healthyCount,\n  unhealthy: checks.length - healthyCount,\n  healthPercentage: Math.round((healthyCount / checks.length) * 100),\n  checks,\n  timestamp: new Date().toISOString()\n};\n\nreturn [{ json: overallHealth }];"
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.healthPercentage}}",
+              "rightValue": 100,
+              "operator": {
+                "type": "number",
+                "operation": "smaller"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-failures",
+      "name": "Has Failures?",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.healthPercentage}}",
+                    "rightValue": 50,
+                    "operator": {
+                      "type": "number",
+                      "operation": "smaller"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "critical"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.healthPercentage}}",
+                    "rightValue": 80,
+                    "operator": {
+                      "type": "number",
+                      "operation": "smaller"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "warning"
+            }
+          ]
+        }
+      },
+      "id": "route-severity",
+      "name": "Route by Severity",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SLACK_WEBHOOK_URL}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "={{$env.SLACK_ALERTS_CHANNEL}}"
+            },
+            {
+              "name": "username",
+              "value": "🚨 Alert Monitor"
+            },
+            {
+              "name": "icon_emoji",
+              "value": ":rotating_light:"
+            },
+            {
+              "name": "text",
+              "value": "🚨 CRITICAL: {{$json.unhealthy}}/{{$json.total}} endpoints down!\n\nFailing:\n{{$json.checks.filter(c => !c.isHealthy).map(c => '• ' + c.endpoint + ' (' + c.statusCode + ')').join('\\n')}}"
+            }
+          ]
+        }
+      },
+      "id": "alert-critical-slack",
+      "name": "Alert Critical (Slack)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "to": "={{$env.ONCALL_EMAIL}}",
+        "subject": "🚨 CRITICAL: Monitoring Alert",
+        "text": "CRITICAL ALERT\n\n{{$json.unhealthy}}/{{$json.total}} endpoints are down.\n\nFailing endpoints:\n{{$json.checks.filter(c => !c.isHealthy).map(c => '- ' + c.endpoint + ': ' + (c.errorMessage || c.statusCode)).join('\\n')}}\n\nTimestamp: {{$json.timestamp}}"
+      },
+      "id": "alert-critical-email",
+      "name": "Alert Critical (Email)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1450, 200],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-cred",
+          "name": "SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SLACK_WEBHOOK_URL}}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "={{$env.SLACK_MONITORING_CHANNEL}}"
+            },
+            {
+              "name": "username",
+              "value": "⚠️ Monitor"
+            },
+            {
+              "name": "icon_emoji",
+              "value": ":warning:"
+            },
+            {
+              "name": "text",
+              "value": "⚠️ WARNING: {{$json.unhealthy}} endpoint(s) experiencing issues\n\nHealth: {{$json.healthPercentage}}%\n\nDetails:\n{{$json.checks.filter(c => !c.isHealthy).map(c => '• ' + c.endpoint).join('\\n')}}"
+            }
+          ]
+        }
+      },
+      "id": "alert-warning-slack",
+      "name": "Alert Warning (Slack)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1250, 400]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "monitoring_logs",
+        "columns": {
+          "mappingMode": "autoMapInputData"
+        }
+      },
+      "id": "log-to-db",
+      "name": "Log to Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1650, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-cred",
+          "name": "PostgreSQL"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Check API 1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check API 2",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check API 1": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check API 2": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Database": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Has Failures?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Failures?": {
+      "main": [
+        [
+          {
+            "node": "Route by Severity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Severity": {
+      "main": [
+        [
+          {
+            "node": "Alert Critical (Slack)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alert Warning (Slack)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Critical (Slack)": {
+      "main": [
+        [
+          {
+            "node": "Alert Critical (Email)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Critical (Email)": {
+      "main": [
+        [
+          {
+            "node": "Log to Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Warning (Slack)": {
+      "main": [
+        [
+          {
+            "node": "Log to Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "automation"
+    },
+    {
+      "name": "monitoring"
+    }
+  ]
+}
