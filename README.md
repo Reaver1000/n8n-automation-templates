@@ -15,7 +15,7 @@ Production-ready workflow templates for common automation scenarios. Import dire
 ## Quick Start
 
 1. Open n8n instance
-2. Go to **Workflows** → **Import from File**
+2. Go to **Workflows > Import from File**
 3. Select a `.json` file from `/workflows/`
 4. Configure credentials (API keys, etc.)
 5. Activate
@@ -25,10 +25,7 @@ Production-ready workflow templates for common automation scenarios. Import dire
 ### 1. Social Media Scheduler (`social-media-scheduler.json`)
 
 ```
-┌──────┐    ┌─────────┐    ┌────────┐    ┌──────────┐
-│ Cron │───▶│ Fetch   │───▶│ Format │───▶│ Post to  │
-│      │    │ Content │    │ for    │    │ Platform │
-└──────┘    └─────────┘    └────────┘    └──────────┘
+Cron -> Fetch Content -> Format -> Post to Platform
 ```
 
 **Features:**
@@ -40,10 +37,7 @@ Production-ready workflow templates for common automation scenarios. Import dire
 ### 2. Lead Qualification Pipeline (`lead-qualification.json`)
 
 ```
-┌──────────┐    ┌──────────┐    ┌──────┐    ┌─────────────┐
-│ Webhook  │───▶│ Enrich   │───▶│ Score│───▶│ Route to    │
-│ (Form)   │    │ (Clearbit)│   │      │    │ CRM/Alert   │
-└──────────┘    └──────────┘    └──────┘    └─────────────┘
+Webhook -> Enrich -> Score -> Route to CRM/Alert
 ```
 
 **Scoring Logic:**
@@ -51,15 +45,12 @@ Production-ready workflow templates for common automation scenarios. Import dire
 - Industry match (1-5 points)
 - Email domain (personal = 0, business = 2)
 - Job title seniority (1-5 points)
-- Lead score → Auto-route to sales or nurture
+- Lead score -> Auto-route to sales or nurture
 
 ### 3. Invoice Automation (`invoice-automation.json`)
 
 ```
-┌──────────┐    ┌──────────┐    ┌─────────┐    ┌───────┐
-│ Schedule │───▶│ Fetch    │───▶│ Generate│───▶│ Email │
-│ (Monthly)│    │ Time Entries│   │ PDF    │    │       │
-└──────────┘    └──────────┘    └─────────┘    └───────┘
+Schedule -> Fetch Time Entries -> Generate PDF -> Email
 ```
 
 **Features:**
@@ -71,10 +62,7 @@ Production-ready workflow templates for common automation scenarios. Import dire
 ### 4. Data Sync Pipeline (`data-sync.json`)
 
 ```
-┌──────────┐    ┌──────────┐    ┌───────┐    ┌──────────┐
-│ Schedule │───▶│ Fetch    │───▶│ Merge │───▶│ Upsert   │
-│ (Hourly) │    │ Source A │    │ with B│    │ Database │
-└──────────┘    └──────────┘    └───────┘    └──────────┘
+Schedule -> Fetch A -> Merge with B -> Upsert Database
 ```
 
 **Features:**
@@ -83,13 +71,10 @@ Production-ready workflow templates for common automation scenarios. Import dire
 - Error handling with retry
 - Change log
 
-### 5. Alert Monitoring (`alert-monitoring.json`)
+### 5. Alert Monitoring (`alert-monitor.json`)
 
 ```
-┌──────┐    ┌──────┐    ┌──────┐    ┌─────────┐
-│ Cron │───▶│ HTTP │───▶│ IF   │───▶│ Alert   │
-│      │    │ Check│    │ Error│    │ Channel │
-└──────┘    └──────┘    └──────┘    └─────────┘
+Cron -> HTTP Check -> IF Error -> Alert Channel
 ```
 
 **Features:**
@@ -123,7 +108,6 @@ Each workflow includes:
 ## License
 
 MIT - Use freely for personal and commercial projects.
-
 
 ## Usage Stats
 
