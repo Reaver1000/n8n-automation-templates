@@ -1,0 +1,156 @@
+{
+  "name": "ShannonAPI 跨境电商多语言 Listing 与 SEO 博客生成",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "3a2b1c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+      "name": "手动触发",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "readFromFile",
+        "fileName": "=/data/products.xlsx",
+        "options": {
+          "headerRow": true
+        }
+      },
+      "id": "4b5c6d7e-8f9a-4b0c-1d2e-3f4a5b6c7d8e",
+      "name": "读取商品表格",
+      "type": "n8n-nodes-base.spreadsheetFile",
+      "typeVersion": 1,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 为每一行商品构建多语言 Amazon Listing + SEO 博客提示词\nconst items = $input.all();\nconst results = [];\nfor (const item of items) {\n  const d = item.json;\n  results.push({\n    json: {\n      sku: d.sku || d['SKU'] || '',\n      name: d.name || d['商品名称'] || '',\n      category: d.category || d['类目'] || '',\n      desc: d.desc || d['中文描述'] || '',\n      country: d.country || d['目标国家'] || 'US',\n      prompt: `请为以下商品生成亚马逊多语言 Listing（英文主 Listing + 德语/法语/日语/西语版本）以及 1200 词 SEO 博客文案。\\n\\n商品名称：${d.name || d['商品名称'] || ''}\\n类目：${d.category || d['类目'] || ''}\\n中文描述：${d.desc || d['中文描述'] || ''}\\n目标站点：${d.country || d['目标国家'] || 'US'}\\n\\n要求：标题不超过 200 字符、五点卖点、产品描述、后台搜索关键词；SEO 博客含 H1/H2 结构、关键词布局与 FAQ。全部用 JSON 输出。`\n    }\n  });\n}\nreturn results;"
+      },
+      "id": "5c6d7e8f-9a0b-4c1d-2e3f-4a5b6c7d8e9f",
+      "name": "构建Listing与SEO提示词",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://shannonapi.xyz/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SHANNON_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "=JSON.stringify({\n  model: 'claude-sonnet-4-20250514',\n  temperature: 0.7,\n  max_tokens: 4096,\n  messages: [\n    { role: 'system', content: '你是一位资深的亚马逊跨境电商运营与 SEO 专家，擅长生成高转化多语言 Listing 与 SEO 博客。' },\n    { role: 'user', content: $json.prompt }\n  ]\n})",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "6d7e8f9a-0b1c-4d2e-3f4a-5b6c7d8e9f0a",
+      "name": "ShannonAPI-生成Listing与博客",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 解析 OpenAI 兼容返回，取出正文并转为结构化字段\nconst items = $input.all();\nconst results = [];\nfor (const item of items) {\n  const body = item.json;\n  const content = body?.choices?.[0]?.message?.content || body?.output_text || JSON.stringify(body);\n  let parsed = null;\n  try {\n    parsed = JSON.parse(content);\n  } catch (e) {\n    parsed = { raw: content };\n  }\n  results.push({ json: { ...item.json, ...parsed, rawContent: content } });\n}\nreturn results;"
+      },
+      "id": "7e8f9a0b-1c2d-4e3f-5a6b-7c8d9e0f1a2b",
+      "name": "解析生成结果",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [780, 300]
+    },
+    {
+      "parameters": {
+        "operation": "writeToFile",
+        "fileName": "=/data/output_listings_seo.xlsx",
+        "options": {
+          "headerRow": true,
+          "sheetName": "Listing"
+        }
+      },
+      "id": "8f9a0b1c-2d3e-4f4a-5b6c-7d8e9f0a1b2c",
+      "name": "写出结果表格",
+      "type": "n8n-nodes-base.spreadsheetFile",
+      "typeVersion": 1,
+      "position": [1040, 300]
+    }
+  ],
+  "connections": {
+    "手动触发": {
+      "main": [
+        [
+          {
+            "node": "读取商品表格",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "读取商品表格": {
+      "main": [
+        [
+          {
+            "node": "构建Listing与SEO提示词",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "构建Listing与SEO提示词": {
+      "main": [
+        [
+          {
+            "node": "ShannonAPI-生成Listing与博客",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ShannonAPI-生成Listing与博客": {
+      "main": [
+        [
+          {
+            "node": "解析生成结果",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "解析生成结果": {
+      "main": [
+        [
+          {
+            "node": "写出结果表格",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "active": false
+}
