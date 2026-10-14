@@ -11,6 +11,7 @@ Production-ready workflow templates for common automation scenarios. Import dire
 | **Invoice Automation** | Generate + send invoices | Schedule, PDF, Email, Airtable |
 | **Data Sync Pipeline** | Sync data between systems | Schedule, HTTP, Merge, Database |
 | **Alert Monitoring** | Monitor APIs + alert on failures | Cron, HTTP, IF, Slack/Email |
+| **Cross-Border SEO Generator** | Bulk multilingual Amazon listings + SEO blogs via LLM | Manual, Spreadsheet File, HTTP, Code |
 
 ## Quick Start
 
@@ -82,6 +83,23 @@ Cron -> HTTP Check -> IF Error -> Alert Channel
 - Response time tracking
 - Slack/Email/Teams alerts
 - Escalation after N failures
+
+### 6. Cross-Border SEO & Multilingual Listing Generator (`shannonapi-cross-border-seo-workflow.json`)
+
+```
+Manual -> Read Product Table -> Build Prompts -> LLM (OpenAI-compatible) -> Parse -> Write Results
+```
+
+**Features:**
+- Reads product info (name/category/description/target country) from an Excel/CSV file
+- Batch generates Amazon multilingual listings (EN/DE/FR/JA/ES) + 1200-word SEO blog per product
+- Uses a single OpenAI-compatible Chat Completions endpoint (`https://shannonapi.xyz/v1`) — swap in any compatible key
+- Structured JSON output, then writes everything back to a results spreadsheet
+
+**Setup:**
+- Set the `SHANNON_API_KEY` environment variable (get one at https://shannonapi.xyz)
+- Change the input/output file paths (`/data/products.xlsx`, `/data/output_listings_seo.xlsx`) to your own
+- Run the manual trigger once; each product row is processed in one call — scale rows freely for high-throughput batches
 
 ## Customization Guide
 
